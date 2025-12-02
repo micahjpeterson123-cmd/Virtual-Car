@@ -48,19 +48,18 @@
         uniform mat4 projection;
         uniform vec4 ambient_light;
 
-        uniform vec4 lightPosition[5];
-        uniform vec4 lightColor[5];
-        uniform vec4 lightDirection[5];
-        uniform bool on_off[5];
+        uniform float cosTheta; // cutoff angle for headlights
+
+        uniform vec4 lightPosition[3];
+        uniform vec4 lightColor[3];
+        uniform vec4 lightDirection[3];
+        uniform bool on_off[3];
 
         out vec4  fColor;
 
         void main()
         {
             // Phong lighting calculation
-
-            // theta threshold value (30 degrees)
-            float cosTheta = cos(radians(30.0));
 
             vec4 amb = color * ambient_light; // calculate ambient lighting;
             vec4 diff = vec4(0,0,0,1);
@@ -71,13 +70,13 @@
             vec3 N = normalize((model_view * Normal).xyz); // normal vector from surface
             vec3 L = vec3(0,0,0);
             vec3 R = vec3(0,0,0);
-            for(int i = 0; i < 5; i++) {
+            for(int i = 0; i < 3; i++) {
                 if(!on_off[i]) continue; // skip if light is turned off
 
-                if(i == 1 || i == 2 || i == 3 || i == 4) { // add cutoff for headlights and emergency lights
-                                                           // calculate cosine of the angle between the vector from light to surface and light direction vector
-                                                           float cosPhi = dot(normalize(veyepos.xyz - lightPosition[i].xyz), normalize(lightDirection[i].xyz));
-                                                           if(cosPhi < cosTheta) continue; // skip if outside the cone
+                if(i == 1 || i == 2) { // add cutoff for headlights
+                   // calculate cosine of the angle between the vector from light to surface and light direction vector
+                   float cosPhi = dot(normalize(veyepos.xyz - lightPosition[i].xyz), normalize(lightDirection[i].xyz));
+                   if(cosPhi < cosTheta) continue; // skip if outside the cone
                 }
 
                 L = normalize(lightPosition[i].xyz - veyepos.xyz); // vector from surface to light
@@ -86,7 +85,7 @@
                 diff += max(dot(L,N), 0.0) * color * lightColor[i]; // calculate diffuse light
 
                 if(dot(L, N) >= 0.0) { // prevent specular highlights from appearing behind objects
-                                       spec += pow(max(dot(R, V), 0.0), SpecularExponent) * SpecularColor * lightColor[i]; // calculate specular light
+                   spec += pow(max(dot(R, V), 0.0), SpecularExponent) * SpecularColor * lightColor[i]; // calculate specular light
                 }
 
             }
