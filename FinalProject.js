@@ -4,13 +4,21 @@ let gl;
 let canvas;
 let program;
 let bufferId;
+let skyboxProgram;
+let skyboxId;
+let skyboxTexture;
+let uSkyboxSampler;
+let skyboxVAO;
 let umv; // index of model_view in shader program
 let uproj; // index of projection in shader program
+let uSkyView; // index of uView in skybox program
+let uSkyProj; // index of uProjection in skybox program
 let vPosition; // remember where this shader attribute is
 let vColor; // remember where the color shader attribute is
 let vNormal; // remember where the normal shader attribute is
 let vSpecularColor; // remember where the specular color attribute is
 let vSpecularExponent; // remember where the specular exponent attribute is
+let vSkyPosition; // remember where the sky position attribute is
 let ambient_light; // index of ambient_light in shader program
 let cosTheta; // index of cos(30) in shader program
 // create arrays for light uniforms
@@ -36,7 +44,7 @@ let buildingverts;
 let wheelverts;
 let headlightverts;
 let updateInterval; // interval for frames per second
-import { initShaders, vec4, flatten, perspective, translate, lookAt, rotateX, rotateY, rotateZ } from './helperfunctions.js';
+import { initFileShaders, vec4, flatten, perspective, translate, lookAt, rotateX, rotateY, rotateZ } from './helperfunctions.js';
 //We want some set up to happen immediately when the page loads
 window.onload = function init() {
     //fetch reference to the canvas element we defined in the html file
@@ -47,17 +55,22 @@ window.onload = function init() {
         alert("WebGL isn't available");
     }
     //Take the vertex and fragment shaders we provided and compile them into a shader program
-    program = initShaders(gl, "vertex-shader", "fragment-shader");
+    program = initFileShaders(gl, "vShader.glsl", "fShader.glsl");
+    skyboxProgram = initFileShaders(gl, "vShaderSkybox.glsl", "fShaderSkybox.glsl");
     gl.useProgram(program); //and we want to use that program for our rendering
     // fetch matrix uniforms
     umv = gl.getUniformLocation(program, "model_view");
     uproj = gl.getUniformLocation(program, "projection");
+    uSkyView = gl.getUniformLocation(skyboxProgram, "uView");
+    uSkyProj = gl.getUniformLocation(skyboxProgram, "uProjection");
+    uSkyboxSampler = gl.getUniformLocation(skyboxProgram, "uSkyboxSampler");
     // fetch attributes
     vPosition = gl.getAttribLocation(program, "vPosition");
     vNormal = gl.getAttribLocation(program, "vNormal");
     vColor = gl.getAttribLocation(program, "vColor");
     vSpecularColor = gl.getAttribLocation(program, "vSpecularColor");
     vSpecularExponent = gl.getAttribLocation(program, "vSpecularExponent");
+    vSkyPosition = gl.getAttribLocation(skyboxProgram, "vSkyPosition");
     // fetch light uniforms
     ambient_light = gl.getUniformLocation(program, "ambient_light");
     // send over cos(30 degrees)
@@ -125,7 +138,9 @@ window.onload = function init() {
         }
         requestAnimationFrame(render); //and now we need a new frame since we made a change
     });
-    // draw all the objects
+    // create skybox
+    makeSkyboxAndBuffer();
+    // create all the objects
     makeCarGroundAndBuffer();
     // draw to the whole canvas
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
@@ -134,6 +149,93 @@ window.onload = function init() {
     //we need to do this to avoid having objects that are behind other objects show up anyway
     gl.enable(gl.DEPTH_TEST);
 };
+// generate skybox cubemap
+function loadCubemap(gl, paths) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+    const targets = [
+        gl.TEXTURE_CUBE_MAP_POSITIVE_X,
+        gl.TEXTURE_CUBE_MAP_NEGATIVE_X,
+        gl.TEXTURE_CUBE_MAP_POSITIVE_Y,
+        gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,
+        gl.TEXTURE_CUBE_MAP_POSITIVE_Z,
+        gl.TEXTURE_CUBE_MAP_NEGATIVE_Z
+    ];
+    for (let i = 0; i < 6; i++) {
+        const image = new Image();
+        image.src = paths[i];
+        image.onload = () => {
+            gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+            gl.texImage2D(targets[i], 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+            gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+        };
+    }
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return texture;
+}
+// create skybox
+function makeSkyboxAndBuffer() {
+    // create skybox texture
+    skyboxTexture = loadCubemap(gl, [
+        "px.png", "nx.png",
+        "py.png", "ny.png",
+        "pz.png", "nz.png"
+    ]);
+    // create skybox vertex list
+    const skyboxVertices = new Float32Array([
+        // front
+        -1, -1, 1,
+        1, -1, 1,
+        -1, 1, 1,
+        -1, 1, 1,
+        1, -1, 1,
+        1, 1, 1,
+        // back
+        -1, -1, -1,
+        -1, 1, -1,
+        1, -1, -1,
+        1, -1, -1,
+        -1, 1, -1,
+        1, 1, -1,
+        // top
+        -1, 1, -1,
+        -1, 1, 1,
+        1, 1, -1,
+        1, 1, -1,
+        -1, 1, 1,
+        1, 1, 1,
+        // bottom
+        -1, -1, -1,
+        1, -1, -1,
+        -1, -1, 1,
+        -1, -1, 1,
+        1, -1, -1,
+        1, -1, 1,
+        // right
+        1, -1, -1,
+        1, 1, -1,
+        1, -1, 1,
+        1, -1, 1,
+        1, 1, -1,
+        1, 1, 1,
+        // left
+        -1, -1, -1,
+        -1, -1, 1,
+        -1, 1, -1,
+        -1, 1, -1,
+        -1, -1, 1,
+        -1, 1, 1
+    ]);
+    // create buffer
+    skyboxId = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyboxId);
+    gl.bufferData(gl.ARRAY_BUFFER, skyboxVertices, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(vSkyPosition);
+    gl.vertexAttribPointer(vSkyPosition, 3, gl.FLOAT, false, 0, 0);
+}
 //Make all of the objects and send them over to the graphics card
 function makeCarGroundAndBuffer() {
     let points = []; //empty array
@@ -436,16 +538,9 @@ function update() {
 //draw a new frame
 function render() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    // set values for lights
-    gl.vertexAttrib4fv(vSpecularColor, [1.0, 1.0, 1.0, 1.0]);
-    gl.vertexAttrib1f(vSpecularExponent, 5.0);
-    gl.uniform4fv(ambient_light, [0.3, 0.3, 0.3, 1]);
-    // overhead light values
-    gl.uniform4fv(lightPosition[0], [0, 50, 0, 1]);
-    gl.uniform4fv(lightColor[0], [1, 1, 1, 1]);
-    gl.uniform1i(on_off[0], lightSwitches[0] ? 1 : 0);
-    let p = perspective(45.0, canvas.clientWidth / canvas.clientHeight, 1.0, 100.0);
-    gl.uniformMatrix4fv(uproj, false, p.flatten());
+    // skybox pass
+    gl.depthFunc(gl.LEQUAL); // draw skybox behind everything
+    gl.useProgram(skyboxProgram);
     let lookAtMatrix;
     // chase camera
     // camera's location in car-local coordinates
@@ -456,6 +551,29 @@ function render() {
     let eyeZ = zoffset - driverEyes[0] * Math.sin(heading);
     // set up camera
     lookAtMatrix = lookAt(new vec4(eyeX, eyeY, eyeZ, 1), new vec4(xoffset, 0, zoffset, 1), new vec4(0, 1, 0, 0));
+    let proj = perspective(60, canvas.width / canvas.height, 0.1, 500.0);
+    gl.uniformMatrix4fv(uSkyView, true, lookAtMatrix.flatten()); // transpose so rotations are not opposite of what we want
+    gl.uniformMatrix4fv(uSkyProj, false, proj.flatten());
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, skyboxTexture);
+    gl.uniform1i(uSkyboxSampler, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyboxId);
+    gl.enableVertexAttribArray(vSkyPosition);
+    gl.vertexAttribPointer(vSkyPosition, 3, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 36); // draw the skybox
+    gl.depthFunc(gl.LESS); // restore normal depth testing
+    // render the rest of the scene
+    gl.useProgram(program);
+    // set values for lights
+    gl.vertexAttrib4fv(vSpecularColor, [1.0, 1.0, 1.0, 1.0]);
+    gl.vertexAttrib1f(vSpecularExponent, 5.0);
+    gl.uniform4fv(ambient_light, [0.3, 0.3, 0.3, 1]);
+    // overhead light values
+    gl.uniform4fv(lightPosition[0], [0, 50, 0, 1]);
+    gl.uniform4fv(lightColor[0], [1, 1, 1, 1]);
+    gl.uniform1i(on_off[0], lightSwitches[0] ? 1 : 0);
+    let p = perspective(45.0, canvas.clientWidth / canvas.clientHeight, 1.0, 100.0);
+    gl.uniformMatrix4fv(uproj, false, p.flatten());
     // move car
     let mv = lookAtMatrix;
     mv = mv.mult(translate(xoffset, 0.0, zoffset));
