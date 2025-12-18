@@ -7,5 +7,6 @@ out vec4 outColor;
 uniform samplerCube uSkyboxSampler;
 
 void main() {
+    // sample the skybox texture
     outColor = texture(uSkyboxSampler, vDirection);
 }

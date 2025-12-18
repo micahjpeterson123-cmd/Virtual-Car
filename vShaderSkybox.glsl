@@ -9,13 +9,13 @@ uniform mat4 uView;
 
 void main() {
 
-    // Apply only rotation, remove translation
-    mat3 rotationOnly = mat3(uView);  // take upper-left 3x3
+    // remove translation by taking upper-left 3x3
+    mat3 rotationOnly = mat3(uView);
 
-    // Rotate the skybox according to the camera orientation
+    // rotate the skybox according to the camera orientation
     vDirection = rotationOnly * vSkyPosition;
 
-    // Push skybox to infinity
+    // push skybox to infinity
     vec4 pos = uProjection * vec4(vSkyPosition, 1.0);
     gl_Position = pos.xyww; // force skybox to infinite distance (w / w => depth = 1.0)
 

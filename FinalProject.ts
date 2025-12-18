@@ -10,6 +10,7 @@ let skyboxProgram:WebGLProgram;
 let skyboxId:WebGLBuffer;
 let skyboxTexture:WebGLTexture;
 let uSkyboxSampler:WebGLUniformLocation;
+let vSkyPosition:GLint; // remember where the sky position attribute is
 
 // env cubemap globals
 let semisphereProgram:WebGLProgram;
@@ -27,22 +28,31 @@ const CUBE_DIRECTIONS: { target: number[]; up: number[] }[] = [
 ];
 let uEnvCubemapSampler:WebGLUniformLocation;
 
-let umv:WebGLUniformLocation; // index of model_view in shader program
-let uproj:WebGLUniformLocation; // index of projection in shader program
+// glass semisphere globals
+let semisphereId:WebGLBuffer;
+let semisphereVertCount:number;
+let vSemispherePosition:GLint;
+let vSemisphereNormal:GLint;
+let mode:WebGLUniformLocation;
 
-let uSkyView:WebGLUniformLocation; // index of uView in skybox program
-let uSkyProj:WebGLUniformLocation; // index of uProjection in skybox program
+// matrix uniform locations
+let umv:WebGLUniformLocation;
+let uproj:WebGLUniformLocation;
+let uSkyView:WebGLUniformLocation;
+let uSkyProj:WebGLUniformLocation;
+let uSemisphereModel:WebGLUniformLocation;
+let uSemisphereView:WebGLUniformLocation;
+let uSemisphereProj:WebGLUniformLocation;
 
-let vPosition:GLint; // remember where this shader attribute is
-let vColor:GLint; // remember where the color shader attribute is
-let vNormal:GLint; // remember where the normal shader attribute is
-let vSpecularColor:GLint; // remember where the specular color attribute is
-let vSpecularExponent:GLint; // remember where the specular exponent attribute is
-let vSkyPosition:GLint; // remember where the sky position attribute is
-
-let ambient_light:WebGLUniformLocation; // index of ambient_light in shader program
-
+// car and scene globals
+let vPosition:GLint;
+let vColor:GLint;
+let vNormal:GLint;
+let vSpecularColor:GLint;
+let vSpecularExponent:GLint;
+let ambient_light:WebGLUniformLocation;
 let cosTheta:WebGLUniformLocation; // index of cos(30) in shader program
+let eta:WebGLUniformLocation; // index of refractive index ratio in semisphere shader program
 
 // create arrays for light uniforms
 let NUM_LIGHTS:number;
@@ -56,7 +66,6 @@ let lightSwitches:boolean[];
 let xoffset:number; // translation x
 let zoffset:number; // translation z
 
-let xrot:number // rotate around x-axis
 let yrot:number // rotate around y-axis
 let zrot:number // rotate around z-axis
 
@@ -65,12 +74,13 @@ let heading:number; // car's orientation angle in radians
 let moveForward:boolean = false; // true when car is moving forward
 let moveBackward:boolean = false; // true when car is moving backward
 
-// vertex offsets for render function
+// vertex offsets
 let carverts:number;
 let groundverts:number;
 let buildingverts:number;
 let wheelverts:number;
 let headlightverts:number;
+let tallbuildingverts:number;
 
 let updateInterval:number; // interval for frames per second
 
@@ -87,29 +97,30 @@ import {
     scalem, rotateZ, rotate
 } from './helperfunctions.js';
 
-
-//We want some set up to happen immediately when the page loads
 window.onload = function init() {
 
-    //fetch reference to the canvas element we defined in the html file
+    // fetch reference to the canvas element we defined in the html file
     canvas = document.getElementById("gl-canvas") as HTMLCanvasElement;
-    //grab the WebGL 2 context for that canvas.  This is what we'll use to do our drawing
+    // grab the WebGL 2 context for that canvas
     gl = canvas.getContext('webgl2') as WebGL2RenderingContext;
     if (!gl) {
         alert("WebGL isn't available");
     }
 
-    //Take the vertex and fragment shaders we provided and compile them into a shader program
+    // take the vertex and fragment shaders and compile them into shader programs
     program = initFileShaders(gl, "vShader.glsl", "fShader.glsl");
     skyboxProgram = initFileShaders(gl, "vShaderSkybox.glsl", "fShaderSkybox.glsl");
     semisphereProgram = initFileShaders(gl, "vShaderSemisphere.glsl", "fShaderSemisphere.glsl");
-    gl.useProgram(program); //and we want to use that program for our rendering
+    gl.useProgram(program);
 
     // fetch matrix uniforms
     umv = gl.getUniformLocation(program, "model_view");
     uproj = gl.getUniformLocation(program, "projection");
     uSkyView = gl.getUniformLocation(skyboxProgram, "uView");
     uSkyProj = gl.getUniformLocation(skyboxProgram, "uProjection");
+    uSemisphereModel = gl.getUniformLocation(semisphereProgram, "uSemisphereModel");
+    uSemisphereView = gl.getUniformLocation(semisphereProgram, "uSemisphereView");
+    uSemisphereProj = gl.getUniformLocation(semisphereProgram, "uSemisphereProjection");
 
     // fetch texture samplers
     uSkyboxSampler = gl.getUniformLocation(skyboxProgram, "uSkyboxSampler");
@@ -122,13 +133,26 @@ window.onload = function init() {
     vSpecularColor = gl.getAttribLocation(program, "vSpecularColor");
     vSpecularExponent = gl.getAttribLocation(program, "vSpecularExponent");
     vSkyPosition = gl.getAttribLocation(skyboxProgram, "vSkyPosition");
+    vSemispherePosition = gl.getAttribLocation(semisphereProgram, "vSemispherePosition");
+    vSemisphereNormal = gl.getAttribLocation(semisphereProgram, "vSemisphereNormal");
 
     // fetch light uniforms
     ambient_light = gl.getUniformLocation(program, "ambient_light");
-
     // send over cos(30 degrees)
     cosTheta = gl.getUniformLocation(program, "cosTheta");
     gl.uniform1f(cosTheta, Math.cos(30.0 * Math.PI / 180.0));
+
+    gl.useProgram(semisphereProgram);
+    // mode: 1 = refraction, 2 = reflection
+    mode = gl.getUniformLocation(semisphereProgram, "mode");
+    // default to refraction + reflection
+    gl.uniform1i(mode, 1);
+    // send over refractive index ratio (1.0 / 1.5) to semisphereProgram
+    eta = gl.getUniformLocation(semisphereProgram, "eta");
+    // 0.0 actually looks much better
+    gl.uniform1f(eta, 0.0);
+
+    gl.useProgram(program);
 
     // initialize number of lights
     NUM_LIGHTS = 3;
@@ -148,9 +172,16 @@ window.onload = function init() {
         lightSwitches[i] = true;
     }
 
+    // disable headlights (For some reason, generating the cubemap from the perspective
+    // of the center of the glass semisphere completely breaks the headlight light source behavior.
+    // However, when the cubemap is generated from the perspective of the chase camera, the
+    // headlights work completely fine. I have tried to figure out why this is for hours and
+    // have gotten nowhere. If you can figure out what is happening, be my guest.)
+    lightSwitches[1] = lightSwitches[2] = false;
+
     // initialize various animation parameters
     xoffset = zoffset = 0;
-    xrot = yrot = zrot = heading = 0;
+    yrot = zrot = heading = 0;
 
     // initialize env cubemap
     const env:{texture:WebGLTexture; framebuffer:WebGLFramebuffer; depth:WebGLRenderbuffer} = createEnvironmentCubemap(gl, envMapSize);
@@ -158,13 +189,13 @@ window.onload = function init() {
     envFBO = env.framebuffer;
     envDepthRB = env.depth;
 
+    // run at 60 fps
     if(updateInterval) {
         clearInterval(updateInterval)
     }
-    // run at 60 frames per second
     updateInterval = window.setInterval(update, 16);
 
-    //This will execute when the user hits a key
+    // keyboard listener
     window.addEventListener("keydown" ,function(event){
         switch(event.key) {
             case " ": // stop car from moving
@@ -199,31 +230,51 @@ window.onload = function init() {
                 gl.uniform1i(on_off[1], lightSwitches[1] ? 1 : 0);
                 gl.uniform1i(on_off[2], lightSwitches[2] ? 1 : 0);
                 break;
+            case "1": // make semisphere do refraction
+                gl.useProgram(semisphereProgram);
+                gl.uniform1i(mode, 1);
+                gl.useProgram(program);
+                break;
+            case "2": // make semisphere do reflection
+                gl.useProgram(semisphereProgram);
+                gl.uniform1i(mode, 2);
+                gl.useProgram(program);
+                break;
+            // case "3": // combine refraction with reflection
+            //     gl.useProgram(semisphereProgram);
+            //     gl.uniform1i(mode, 3);
+            //     gl.useProgram(program);
+            //     break;
         }
-        requestAnimationFrame(render);//and now we need a new frame since we made a change
+        requestAnimationFrame(render);
     });
 
-    // create skybox
+    // generate skybox
     makeSkyboxAndBuffer();
 
-    // create all the objects
+    // generate all the objects (except semisphere)
     makeCarGroundAndBuffer();
+
+    // generate semisphere
+    generateSemisphere(360);
 
     // draw to the whole canvas
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
 
-    // set background color to black
+    // set void color to black
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
 
-    //we need to do this to avoid having objects that are behind other objects show up anyway
+    // avoid having objects that are behind other objects show up anyway
     gl.enable(gl.DEPTH_TEST);
 };
 
-// generate skybox cubemap
+// generate skybox cubemap using filepath strings of image files
 function loadSkyboxCubemap(gl: WebGLRenderingContext, paths: string[]): WebGLTexture {
-    const texture:WebGLTexture = gl.createTexture();
+    // create cubemap texture
+    const texture: WebGLTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
 
+    // establish targets
     const targets = [
         gl.TEXTURE_CUBE_MAP_POSITIVE_X,
         gl.TEXTURE_CUBE_MAP_NEGATIVE_X,
@@ -233,21 +284,25 @@ function loadSkyboxCubemap(gl: WebGLRenderingContext, paths: string[]): WebGLTex
         gl.TEXTURE_CUBE_MAP_NEGATIVE_Z
     ];
 
-    // create each face
-    for (let i:number = 0; i < 6; i++) {
+    // attach images to cubemap, then apply texture filters after all images are fully loaded
+    let loadedImages = 0;
+    for (let i = 0; i < 6; i++) {
         const image = new Image();
         image.src = paths[i];
         image.onload = () => {
             gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
             gl.texImage2D(targets[i], 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+
+            loadedImages++;
+            if (loadedImages === 6) {
+                gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+                gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+                gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            }
         };
     }
-
-    gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     return texture;
 }
@@ -316,13 +371,15 @@ function makeSkyboxAndBuffer() {
     // create buffer
     skyboxId = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, skyboxId);
+    // send skyboxVertices to graphics card
     gl.bufferData(gl.ARRAY_BUFFER, skyboxVertices, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(vSkyPosition);
     gl.vertexAttribPointer(vSkyPosition, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(vSkyPosition);
 
 }
 
 // create env cubemap
+// allocates an empty cubemap for renderEnvironmentCubemapFull() to populate
 function createEnvironmentCubemap(gl: WebGL2RenderingContext, size: number):
     { texture:WebGLTexture; framebuffer:WebGLFramebuffer; depth:WebGLRenderbuffer }
 {
@@ -345,10 +402,12 @@ function createEnvironmentCubemap(gl: WebGL2RenderingContext, size: number):
         );
     }
 
+    // apply texture filters
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
 
     // create framebuffer and depth renderbuffer
     const fb:WebGLFramebuffer = gl.createFramebuffer();
@@ -356,7 +415,7 @@ function createEnvironmentCubemap(gl: WebGL2RenderingContext, size: number):
     gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
     gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, size, size);
 
-    // unbind
+    // unbind everything
     gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindRenderbuffer(gl.RENDERBUFFER, null);
@@ -367,11 +426,11 @@ function createEnvironmentCubemap(gl: WebGL2RenderingContext, size: number):
 // render env cubemap
 function renderEnvironmentCubemapFull() {
 
-    // retrieve position of semisphere
-    const center:vec4 = getSemisphereWorldPosition();
+    // center of semisphere
+    const center:vec4 = new vec4(xoffset, 0.6, zoffset, 1.0);
 
-    // 90-degree fov, aspect ratio 1.0, to get square image
-    const proj = perspective(90, 1.0, 0.1, 500.0);
+    // 90 degree fov, aspect ratio 1.0, to get square image
+    const proj:mat4 = perspective(90, 1.0, 0.1, 500.0);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, envFBO);
     gl.bindRenderbuffer(gl.RENDERBUFFER, envDepthRB);
@@ -379,6 +438,7 @@ function renderEnvironmentCubemapFull() {
     // set renderbuffer as depth attachment
     gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, envDepthRB);
 
+    // establish targets
     const targets = [
         gl.TEXTURE_CUBE_MAP_POSITIVE_X,
         gl.TEXTURE_CUBE_MAP_NEGATIVE_X,
@@ -410,8 +470,8 @@ function renderEnvironmentCubemapFull() {
         gl.uniformMatrix4fv(uproj, false, proj.flatten()); // projection for cubemap face
         gl.uniformMatrix4fv(umv, false, view.flatten());   // view as model_view for scene
 
-        // draw scene objects, but skip the semisphere (otherwise it appears in itself)
-        drawSceneObjects(true); // pass true to exclude semisphere object
+        // draw scene objects from the perspective of the center of the semisphere, but skip the semisphere (otherwise it appears in itself)
+        drawSceneObjects(view, proj, true); // pass true to exclude semisphere object
     }
 
     // generate mipmaps
@@ -423,361 +483,157 @@ function renderEnvironmentCubemapFull() {
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
 }
 
-
-// draw objects and exclude semisphere if boolean is true
-function drawSceneObjects(excludeSemisphere: boolean) {
-
-    // skybox pass
-    gl.depthFunc(gl.LEQUAL); // draw skybox behind everything
-    gl.useProgram(skyboxProgram);
-
-    let lookAtMatrix:mat4;
-
-    // chase camera
-    // camera's location in car-local coordinates
-    let driverEyes:vec4 = new vec4(7.5, 1.5, 0.0, 1.0);
-
-    // camera position rotated by car's heading
-    let eyeX:number = xoffset + driverEyes[0] * Math.cos(heading);
-    let eyeY:number = driverEyes[1];
-    let eyeZ:number = zoffset - driverEyes[0] * Math.sin(heading);
-
-    // set up camera
-    lookAtMatrix = lookAt(new vec4(eyeX, eyeY, eyeZ, 1),
-        new vec4(xoffset, 0, zoffset, 1),
-        new vec4(0, 1, 0, 0));
-
-    let proj = perspective(60, canvas.width / canvas.height, 0.1, 500.0);
-
-    gl.uniformMatrix4fv(uSkyView, true, lookAtMatrix.flatten()); // transpose so rotations are not opposite of what we want
-    gl.uniformMatrix4fv(uSkyProj, false, proj.flatten());
-
-    // bind skybox texture
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_CUBE_MAP, skyboxTexture);
-    gl.uniform1i(uSkyboxSampler, 0);
-
-    // bind skybox buffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, skyboxId);
-    gl.enableVertexAttribArray(vSkyPosition);
-    gl.vertexAttribPointer(vSkyPosition, 3, gl.FLOAT, false, 0, 0);
-
-    gl.drawArrays(gl.TRIANGLES, 0, 36); // draw the skybox
-
-    gl.depthFunc(gl.LESS); // restore normal depth testing
-
-    // render the rest of the scene
-    gl.useProgram(program);
-
-    // set values for lights
-    gl.vertexAttrib4fv(vSpecularColor, [1.0, 1.0, 1.0, 1.0]);
-    gl.vertexAttrib1f(vSpecularExponent, 5.0);
-    gl.uniform4fv(ambient_light, [0.3, 0.3, 0.3, 1]);
-
-    // overhead light values
-    gl.uniform4fv(lightPosition[0], [0, 50, 0, 1]);
-    gl.uniform4fv(lightColor[0], [1, 1, 1, 1]);
-    gl.uniform1i(on_off[0], lightSwitches[0] ? 1 : 0);
-
-    let p:mat4 = perspective(45.0, canvas.clientWidth / canvas.clientHeight, 1.0, 100.0);
-
-    gl.uniformMatrix4fv(uproj, false, p.flatten());
-
-    // move car
-    let mv:mat4 = lookAtMatrix;
-    mv = mv.mult(translate(xoffset, 0.0, zoffset));
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-
-    // draw car body
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufferId);
-    gl.vertexAttribPointer(vPosition, 4, gl.FLOAT, false, 48, 0);
-    gl.enableVertexAttribArray(vPosition);
-    vNormal = gl.getAttribLocation(program, "vNormal");
-    gl.vertexAttribPointer(vNormal, 4, gl.FLOAT, false, 48, 16);
-    gl.enableVertexAttribArray(vNormal);
-    gl.vertexAttribPointer(vColor, 4, gl.FLOAT, false, 48, 32);
-    gl.enableVertexAttribArray(vColor);
-    gl.drawArrays(gl.TRIANGLES, 0, carverts);    // draw the car body
-
-    // add ground
-    mv = lookAtMatrix
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts, groundverts);    // draw the ground
-
-    // add building
-    mv = lookAtMatrix
-    mv = mv.mult(translate(-10.0, -0.5, -10.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts, buildingverts);
-
-    // add building
-    mv = lookAtMatrix
-    mv = mv.mult(translate(10.0, -0.5, -10.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts, buildingverts);
-
-    // add building
-    mv = lookAtMatrix
-    mv = mv.mult(translate(-10.0, -0.5, 10.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts, buildingverts);
-
-    // add building
-    mv = lookAtMatrix
-    mv = mv.mult(translate(10.0, -0.5, 10.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts, buildingverts);
-
-    // add front left wheel
-    mv = lookAtMatrix
-    mv = mv.mult(translate(xoffset, 0.0, zoffset));
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    mv = mv.mult(translate(-1.5, 0.0, 0.5));
-    mv = mv.mult(rotateY(yrot));
-    mv = mv.mult(rotateZ(zrot));
-    mv = mv.mult(rotateX(90.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts, wheelverts);    // draw the wheel
-
-    // add front right wheel
-    mv = lookAtMatrix
-    mv = mv.mult(translate(xoffset, 0.0, zoffset));
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    mv = mv.mult(translate(-1.5, 0.0, -0.5));
-    mv = mv.mult(rotateY(yrot));
-    mv = mv.mult(rotateZ(zrot));
-    mv = mv.mult(rotateX(90.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts, wheelverts);    // draw the wheel
-
-    // add back left wheel
-    mv = lookAtMatrix
-    mv = mv.mult(translate(xoffset, 0.0, zoffset));
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    mv = mv.mult(translate(1.5, 0.0, 0.5));
-    mv = mv.mult(rotateZ(zrot));
-    mv = mv.mult(rotateX(90.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts, wheelverts);    // draw the wheel
-
-    // add back right wheel
-    mv = lookAtMatrix
-    mv = mv.mult(translate(xoffset, 0.0, zoffset));
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    mv = mv.mult(translate(1.5, 0.0, -0.5));
-    mv = mv.mult(rotateZ(zrot));
-    mv = mv.mult(rotateX(90.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts, wheelverts);    // draw the wheel
-
-    // add left headlight
-    mv = lookAtMatrix
-    mv = mv.mult(translate(xoffset, 0.0, zoffset));
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    mv = mv.mult(translate(-1.55, 0.0, -0.3));
-    mv = mv.mult(rotateZ(90.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts + wheelverts, headlightverts);    // draw the headlight
-
-    // set left headlight values
-    // define light's position and direction in model space
-    let localPos:vec4 = new vec4(0.0, 0.05, 0.0, 1.0);
-    let localDir:vec4 = new vec4(0.0, 1.0, 0.0, 0.0);
-    // get eye space position of light by applying same transformation matrix
-    let eyePos:vec4 = mv.mult(localPos);
-    // get eye space of direction of light by applying the same rotation transformations above
-    mv = lookAtMatrix
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    mv = mv.mult(rotateZ(90.0));
-    let eyeDir:vec4 = mv.mult(localDir);
-    // send data to shader
-    gl.uniform4fv(lightPosition[1], eyePos.flatten());
-    gl.uniform4fv(lightColor[1], [1.0, 1.0, 1.0, 1.0]);
-    gl.uniform4fv(lightDirection[1], eyeDir.flatten());
-    gl.uniform1i(on_off[1], lightSwitches[1] ? 1 : 0);
-
-    // add right headlight
-    mv = lookAtMatrix
-    mv = mv.mult(translate(xoffset, 0.0, zoffset));
-    mv = mv.mult(rotateY(heading * 180.0 / Math.PI));
-    mv = mv.mult(translate(-1.55, 0.0, 0.3));
-    mv = mv.mult(rotateZ(90.0));
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
-    gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts + wheelverts, headlightverts);    // draw the headlight
-
-    // set right headlight values
-    // define light's position in model space
-    localPos = new vec4(0.0, 0.05, 0.0, 1.0);
-    // get eye space position of light by applying same transformation matrix
-    eyePos = mv.mult(localPos);
-    // send data to shader
-    gl.uniform4fv(lightPosition[2], eyePos.flatten());
-    gl.uniform4fv(lightColor[2], [1.0, 1.0, 1.0, 1.0]);
-    gl.uniform4fv(lightDirection[2], eyeDir.flatten());
-    gl.uniform1i(on_off[2], lightSwitches[1] ? 1 : 0);
-
-    // send data to shader
-    gl.uniform4fv(lightPosition[3], eyePos.flatten());
-    gl.uniform4fv(lightColor[3], [0.0, 0.0, 1.0, 1.0]);
-    gl.uniform4fv(lightDirection[3], eyeDir.flatten());
-    gl.uniform1i(on_off[3], lightSwitches[3] ? 1 : 0);
-
-    if (!excludeSemisphere) {
-        // set semisphere-specific shader (when not capturing env)
-        drawSemisphere();
-    }
-}
-
-//Make all of the objects and send them over to the graphics card
+// make all of the objects (except semisphere) and send them over to the graphics card
 function makeCarGroundAndBuffer(){
-    let points:vec4[] = []; //empty array
+    let points:vec4[] = []; // empty array
+
+    // push order: position, normal, color
 
     // add car body
-    //left face = 6 verts, position then color
+    // left face
     points.push(new vec4(1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); //cyan
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
     points.push(new vec4(1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); //cyan
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
     points.push(new vec4(-1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); //cyan
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
     points.push(new vec4(-1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); //cyan
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
     points.push(new vec4(-1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); //cyan
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
     points.push(new vec4(1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); //cyan
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
 
-    //right face
+    // right face
     points.push(new vec4(-1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); //magenta
+    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
     points.push(new vec4(-1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 1.0, 1.0));//magenta
+    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
     points.push(new vec4(1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 1.0, 1.0));//magenta
+    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
     points.push(new vec4(1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 1.0, 1.0));//magenta
+    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
     points.push(new vec4(1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 1.0, 1.0));//magenta
+    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
     points.push(new vec4(-1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 1.0, 1.0));//magenta
+    points.push(new vec4(0.0, 0.0, -1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
 
-    //back face
+    // back face
     points.push(new vec4(1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); //yellow
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
     points.push(new vec4(1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); //yellow
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
     points.push(new vec4(1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); //yellow
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
     points.push(new vec4(1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); //yellow
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
     points.push(new vec4(1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); //yellow
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
     points.push(new vec4(1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); //yellow
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
 
-    //front face
+    // front face
     points.push(new vec4(-1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); //red
+    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
     points.push(new vec4(-1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); //red
+    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
     points.push(new vec4(-1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); //red
+    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
     points.push(new vec4(-1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); //red
+    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
     points.push(new vec4(-1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); //red
+    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
     points.push(new vec4(-1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); //normal
-    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); //red
+    points.push(new vec4(-1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
 
-    //top
+    // top
     points.push(new vec4(1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); //blue
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); // blue
     points.push(new vec4(1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); //blue
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); // blue
     points.push(new vec4(-1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); //blue
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); // blue
     points.push(new vec4(-1.5, 0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); //blue
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); // blue
     points.push(new vec4(-1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); //blue
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); // blue
     points.push(new vec4(1.5, 0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); //blue
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.0, 1.0, 1.0)); // blue
 
-    //bottom
+    // bottom
     points.push(new vec4(1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); //green
+    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); // green
     points.push(new vec4(1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); //green
+    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); // green
     points.push(new vec4(-1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); //green
+    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); // green
     points.push(new vec4(-1.5, -0.5, 0.5, 1.0));
-    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); //green
+    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); // green
     points.push(new vec4(-1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); //green
+    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); // green
     points.push(new vec4(1.5, -0.5, -0.5, 1.0));
-    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); //green
+    points.push(new vec4(0.0, -1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 0.0, 1.0)); // green
 
     carverts = points.length / 3;
 
     // add the ground
-    // First Triangle
+    // first triangle
     points.push(new vec4(-50.0, -0.5, -50.0, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); //dark green
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); // dark green
     points.push(new vec4(50.0, -0.5, -50.0, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); //dark green
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); // dark green
     points.push(new vec4(50.0, -0.5, 50.0, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); //dark green
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); // dark green
 
-    // Second Triangle
+    // second triangle
     points.push(new vec4(-50.0, -0.5, -50.0, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); //dark green
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); // dark green
     points.push(new vec4(50.0, -0.5, 50.0, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); //dark green
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); // dark green
     points.push(new vec4(-50.0, -0.5, 50.0, 1.0));
-    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); //normal
-    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); //dark green
+    points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
+    points.push(new vec4(0.0, 0.5, 0.0, 1.0)); // dark green
 
     groundverts = (points.length / 3) - carverts;
 
@@ -785,30 +641,29 @@ function makeCarGroundAndBuffer(){
     let subdiv:number = 15;
     let r:number = 2.5;
     let step:number = (360.0 / subdiv)*(Math.PI / 180.0);
-
-    for (let lat:number = 0; lat <= Math.PI ; lat += step){ //latitude
-        for (let lon:number = 0; lon + step <= 2*Math.PI; lon += step){ //longitude
+    for (let lat:number = 0; lat <= Math.PI ; lat += step){ // latitude
+        for (let lon:number = 0; lon + step <= 2*Math.PI; lon += step){ // longitude
             //triangle 1
             points.push(new vec4(r * Math.sin(lat) * Math.sin(lon) , r * Math.cos(lat) , r *  Math.cos(lon) * Math.sin(lat), 1.0));
-            points.push(new vec4(r * Math.sin(lat) * Math.sin(lon), r * Math.cos(lat), r * Math.cos(lon) * Math.sin(lat),  0.0)); //normal
-            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); //gray
+            points.push(new vec4(r * Math.sin(lat) * Math.sin(lon), r * Math.cos(lat), r * Math.cos(lon) * Math.sin(lat),  0.0)); // normal
+            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); // gray
             points.push(new vec4(r * Math.sin(lat) * Math.sin(lon + step), r * Math.cos(lat), r * Math.sin(lat) * Math.cos(lon + step),  1.0));
-            points.push(new vec4(r * Math.sin(lat) * Math.sin(lon + step), r *  Math.cos(lat), r * Math.sin(lat) * Math.cos(lon + step), 0.0)); //normal
-            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); //gray
+            points.push(new vec4(r * Math.sin(lat) * Math.sin(lon + step), r *  Math.cos(lat), r * Math.sin(lat) * Math.cos(lon + step), 0.0)); // normal
+            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); // gray
             points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon + step), r *  Math.cos(lat + step), r * Math.cos(lon + step) * Math.sin(lat + step),  1.0));
-            points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon + step), r * Math.cos(lat + step), r * Math.cos(lon + step) * Math.sin(lat + step),  0.0)); //normal
-            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); //gray
+            points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon + step), r * Math.cos(lat + step), r * Math.cos(lon + step) * Math.sin(lat + step),  0.0)); // normal
+            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); // gray
 
             //triangle 2
             points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon + step), r *  Math.cos(lat + step), r * Math.cos(lon + step) * Math.sin(lat + step), 1.0));
-            points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon + step), r *  Math.cos(lat + step), r * Math.cos(lon + step) * Math.sin(lat + step), 0.0)); //normal
-            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); //gray
+            points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon + step), r *  Math.cos(lat + step), r * Math.cos(lon + step) * Math.sin(lat + step), 0.0)); // normal
+            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); // gray
             points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon), r *  Math.cos(lat + step), r * Math.sin(lat + step) * Math.cos(lon),  1.0));
-            points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon), r *  Math.cos(lat + step), r *  Math.sin(lat + step) * Math.cos(lon), 0.0)); //normal
-            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); //gray
+            points.push(new vec4(r * Math.sin(lat + step) * Math.sin(lon), r *  Math.cos(lat + step), r *  Math.sin(lat + step) * Math.cos(lon), 0.0)); // normal
+            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); // gray
             points.push(new vec4(r * Math.sin(lat) * Math.sin(lon), r *  Math.cos(lat), r * Math.cos(lon) * Math.sin(lat),  1.0));
-            points.push(new vec4(r * Math.sin(lat) * Math.sin(lon), r *  Math.cos(lat), r * Math.cos(lon) * Math.sin(lat), 0.0)); //normal
-            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); //gray
+            points.push(new vec4(r * Math.sin(lat) * Math.sin(lon), r *  Math.cos(lat), r * Math.cos(lon) * Math.sin(lat), 0.0)); // normal
+            points.push(new vec4(0.5, 0.5, 0.5, 1.0)); // gray
         }
     }
 
@@ -829,7 +684,7 @@ function makeCarGroundAndBuffer(){
 
         // rectangular slices to create the round side of cylinder
 
-        // Triangle 1
+        // triangle 1
         points.push(new vec4(x1, -0.05, z1, 1.0));
         points.push(new vec4(x1 / 0.5, 0.0, z1 / 0.5, 0.0)); // normal
         points.push(new vec4(0, 0, 0, 1.0)); // black
@@ -840,7 +695,7 @@ function makeCarGroundAndBuffer(){
         points.push(new vec4(x1 / 0.5, 0.0, z1 / 0.5, 0.0)); // normal
         points.push(new vec4(0, 0, 0, 1.0)); // black
 
-        // Triangle 2
+        // triangle 2
         points.push(new vec4(x2, -0.05, z2, 1.0));
         points.push(new vec4(x2 / 0.5, 0.0, z2 / 0.5, 0.0)); // normal
         points.push(new vec4(0, 0, 0, 1.0)); // black
@@ -888,7 +743,7 @@ function makeCarGroundAndBuffer(){
         let x2: number = 0.1 * Math.cos(theta2);
         let z2: number = 0.1 * Math.sin(theta2);
 
-        // circle
+        // triangle fan
         points.push(new vec4(0.0, 0.0, 0.0, 1.0));
         points.push(new vec4(0.0, 1.0, 0.0, 0.0)); // normal
         points.push(new vec4(1.0, 1.0, 1.0, 1.0)); // white
@@ -902,61 +757,397 @@ function makeCarGroundAndBuffer(){
 
     headlightverts = (points.length / 3) - carverts - groundverts - buildingverts - wheelverts;
 
-    //we need some graphics memory for this information
+    // add tall, multicolored building to be drawn four times
+    // front face
+    points.push(new vec4(1.0, -0.5, 1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
+    points.push(new vec4(1.0, 10.0, 1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
+    points.push(new vec4(-1.0, 10.0, 1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
+    points.push(new vec4(-1.0, 10.0, 1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
+    points.push(new vec4(-1.0, -0.5, 1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
+    points.push(new vec4(1.0, -0.5, 1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(0.0, 1.0, 1.0, 1.0)); // cyan
+
+    // back face
+    points.push(new vec4(1.0, -0.5, -1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
+    points.push(new vec4(1.0, 10.0, -1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
+    points.push(new vec4(-1.0, 10.0, -1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
+    points.push(new vec4(-1.0, 10.0, -1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
+    points.push(new vec4(-1.0, -0.5, -1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
+    points.push(new vec4(1.0, -0.5, -1.0, 1.0));
+    points.push(new vec4(0.0, 0.0, 1.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 1.0, 1.0)); // magenta
+
+    // right face
+    points.push(new vec4(1.0, 10.0, 1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
+    points.push(new vec4(1.0, -0.5, 1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
+    points.push(new vec4(1.0, -0.5, -1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
+    points.push(new vec4(1.0, -0.5, -1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
+    points.push(new vec4(1.0, 10.0, -1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
+    points.push(new vec4(1.0, 10.0, 1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.5, 1.0, 0.0, 1.0)); // yellow
+
+    // left face
+    points.push(new vec4(-1.0, 10.0, 1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
+    points.push(new vec4(-1.0, -0.5, 1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
+    points.push(new vec4(-1.0, -0.5, -1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
+    points.push(new vec4(-1.0, -0.5, -1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
+    points.push(new vec4(-1.0, 10.0, -1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
+    points.push(new vec4(-1.0, 10.0, 1.0, 1.0));
+    points.push(new vec4(1.0, 0.0, 0.0, 0.0)); // normal
+    points.push(new vec4(1.0, 0.0, 0.0, 1.0)); // red
+
+    tallbuildingverts = (points.length / 3) - carverts - groundverts - buildingverts - wheelverts - headlightverts;
+
+    // create buffer
     bufferId = gl.createBuffer();
-    //tell WebGL that the buffer we just created is the one we want to work with right now
     gl.bindBuffer(gl.ARRAY_BUFFER, bufferId);
-    //send the local data over to this buffer on the graphics card
+    // send the local data over to this buffer on the graphics card
     gl.bufferData(gl.ARRAY_BUFFER, flatten(points), gl.STATIC_DRAW);
 
-    //Data is packed in groups of 4 floats which are 4 bytes each, 48 bytes total for position, normal, and color
+    // data is packed in groups of 4 floats which are 4 bytes each, 48 bytes total for position, normal, and color
     // position                       normal                     color
     //  x   y   z     w        x     y     z     w        r     g     b     a
     // 0-3 4-7 8-11 12-15    16-19 20-23 24-27 28-31    32-35 36-39 40-43 44-47
 
-    //The vertex shader has an attribute named "vPosition"
+    // set up attribute pointers
     vPosition = gl.getAttribLocation(program, "vPosition");
-
-    //attribute location we just fetched, 4 elements in each vector, data type float, don't normalize this data,
-    //each position starts 48 bytes after the start of the previous one, and starts right away at index 0
-
     gl.vertexAttribPointer(vPosition, 4, gl.FLOAT, false, 48, 0);
     gl.enableVertexAttribArray(vPosition);
-
-    //The vertex shader also has an attribute named "vNormal"
     vNormal = gl.getAttribLocation(program, "vNormal");
-
-    //attribute location we just fetched, 4 elements in each vector, data type float, don't normalize this data,
-    //each normal starts 48 bytes after the start of the previous one, and the first normal starts 16 bytes into the data
-
     gl.vertexAttribPointer(vNormal, 4, gl.FLOAT, false, 48, 16);
     gl.enableVertexAttribArray(vNormal);
-
-    //The vertex shader also has an attribute named "vColor"
     vColor = gl.getAttribLocation(program, "vColor");
-
-    //attribute location we just fetched, 4 elements in each vector, data type float, don't normalize this data,
-    //each color starts 32 bytes after the start of the previous one, and the first color starts 32 bytes into the data
-
     gl.vertexAttribPointer(vColor, 4, gl.FLOAT, false, 48, 32);
     gl.enableVertexAttribArray(vColor);
 }
 
-// find location of center of glass semisphere in world coordinates
-function getSemisphereWorldPosition(): vec4 {
-    // cubemap center should be at (0.0, 0.5, 0.0) in model coordinates
-    const localX = 0.0;
-    const localY = 0.5;
-    const localZ = 0.0;
-    // rotate local offset by heading and then add xoffset/zoffset
-    const worldX = xoffset + localX * Math.cos(heading) - localZ * Math.sin(heading);
-    const worldY = localY;
-    const worldZ = zoffset + localX * Math.sin(heading) + localZ * Math.cos(heading);
-    return new vec4(worldX, worldY, worldZ, 1.0);
+// generate semisphere and send to graphics card
+function generateSemisphere(subdiv: number) {
+
+    // helper function to generate spherical coordinates
+    function spherePoint(lat: number, lon: number): number[] {
+        const x:number = Math.sin(lat) * Math.cos(lon);
+        const y:number = Math.cos(lat);
+        const z:number = Math.sin(lat) * Math.sin(lon);
+        return [x, y, z];
+    }
+
+    const stepLat:number = Math.PI / subdiv; // latitude from 0 -> PI/2
+    const stepLon:number = 2 * Math.PI / subdiv; // full longitude
+
+    let semisphereverts: vec4[] = []; // interleaved position and normal
+
+    for (let lat:number = 0; lat < Math.PI / 2; lat += stepLat) {
+        for (let lon:number = 0; lon < 2 * Math.PI; lon += stepLon) {
+
+            const p0:number[] = spherePoint(lat, lon);
+            const p1:number[] = spherePoint(lat + stepLat, lon);
+            const p2:number[] = spherePoint(lat + stepLat, lon + stepLon);
+            const p3:number[] = spherePoint(lat, lon + stepLon);
+
+            // triangle 1
+            semisphereverts.push(new vec4(p0[0], p0[1], p0[2], 1.0)); // position
+            semisphereverts.push(new vec4(p0[0], p0[1], p0[2], 0.0)); // normal
+            semisphereverts.push(new vec4(p1[0], p1[1], p1[2], 1.0)); // position
+            semisphereverts.push(new vec4(p1[0], p1[1], p1[2], 0.0)); // normal
+            semisphereverts.push(new vec4(p2[0], p2[1], p2[2], 1.0)); // position
+            semisphereverts.push(new vec4(p2[0], p2[1], p2[2], 0.0)); // normal
+
+            // triangle 2
+            semisphereverts.push(new vec4(p0[0], p0[1], p0[2], 1.0)); // position
+            semisphereverts.push(new vec4(p0[0], p0[1], p0[2], 0.0)); // normal
+            semisphereverts.push(new vec4(p3[0], p3[1], p3[2], 1.0)); // position
+            semisphereverts.push(new vec4(p3[0], p3[1], p3[2], 0.0)); // normal
+            semisphereverts.push(new vec4(p2[0], p2[1], p2[2], 1.0)); // position
+            semisphereverts.push(new vec4(p2[0], p2[1], p2[2], 0.0)); // normal
+        }
+    }
+
+    // create buffer
+    semisphereId = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, semisphereId);
+    gl.bufferData(gl.ARRAY_BUFFER, flatten(semisphereverts), gl.STATIC_DRAW);
+
+    semisphereVertCount = semisphereverts.length / 2;
+
+    // setup attribute pointers
+    gl.vertexAttribPointer(vSemispherePosition, 4, gl.FLOAT, false, 32, 0);
+    gl.enableVertexAttribArray(vSemispherePosition);
+
+    gl.vertexAttribPointer(vSemisphereNormal, 4, gl.FLOAT, false, 32, 16);
+    gl.enableVertexAttribArray(vSemisphereNormal);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
 }
 
-// draw the glass semisphere
+// generate the model_view matrix for the chase camera
+function getChaseCameraView(): mat4 {
+    // camera location in car local coordinates
+    let driverEyes:vec4 = new vec4(5.0, 1.0, 0.0, 1.0);
+
+    // apply translations and rotations of car's movement
+    let eyeX:number = xoffset + driverEyes[0] * Math.cos(heading);
+    let eyeY:number = driverEyes[1];
+    let eyeZ:number = zoffset - driverEyes[0] * Math.sin(heading);
+
+    return lookAt(
+        new vec4(eyeX, eyeY, eyeZ, 1),
+        new vec4(xoffset, 0.6, zoffset, 1),
+        new vec4(0, 1, 0, 0)
+    );
+}
+
+// generate projection matrix for chase camera
+function getChaseCameraProjection(): mat4 {
+    return perspective(60, canvas.width / canvas.height, 0.1, 500.0);
+}
+
+// draw objects
+function drawSceneObjects(view: mat4, proj: mat4, excludeSemisphere: boolean) {
+
+    // skybox pass
+
+    // push skybox to infinite distance
+    gl.depthFunc(gl.LEQUAL);
+    gl.useProgram(skyboxProgram);
+
+    // set view transpose = true so skybox rotates with camera correctly
+    gl.uniformMatrix4fv(uSkyView, true, view.flatten());
+    gl.uniformMatrix4fv(uSkyProj, false, proj.flatten());
+
+    // set up skybox texture for fragment shader
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, skyboxTexture);
+    gl.uniform1i(uSkyboxSampler, 1);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyboxId);
+    gl.enableVertexAttribArray(vSkyPosition);
+    gl.vertexAttribPointer(vSkyPosition, 3, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 36); // draw the skybox
+
+    gl.depthFunc(gl.LESS); // re-enable depth testing
+
+    // scene pass
+
+    gl.useProgram(program);
+
+    // set up light attributes
+    gl.vertexAttrib4fv(vSpecularColor, [1, 1, 1, 1]);
+    gl.vertexAttrib1f(vSpecularExponent, 5.0);
+    gl.uniform4fv(ambient_light, [0.3, 0.3, 0.3, 1]);
+
+    // send over light uniform values
+    gl.uniform4fv(lightPosition[0], [0, 100, 0, 1]);
+    gl.uniform4fv(lightColor[0], [1, 1, 1, 1]);
+    gl.uniform1i(on_off[0], lightSwitches[0] ? 1 : 0);
+
+    gl.uniformMatrix4fv(uproj, false, proj.flatten());
+
+    // car body
+    let mv:mat4 = view
+        .mult(translate(xoffset, 0.0, zoffset))
+        .mult(rotateY(heading * 180 / Math.PI));
+
+    gl.uniformMatrix4fv(umv, false, mv.flatten());
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufferId);
+    gl.vertexAttribPointer(vPosition, 4, gl.FLOAT, false, 48, 0);
+    gl.enableVertexAttribArray(vPosition);
+
+    vNormal = gl.getAttribLocation(program, "vNormal");
+    gl.vertexAttribPointer(vNormal, 4, gl.FLOAT, false, 48, 16);
+    gl.enableVertexAttribArray(vNormal);
+
+    gl.vertexAttribPointer(vColor, 4, gl.FLOAT, false, 48, 32);
+    gl.enableVertexAttribArray(vColor);
+
+    gl.drawArrays(gl.TRIANGLES, 0, carverts); // draw car
+
+    // ground
+    mv = view;
+    gl.uniformMatrix4fv(umv, false, mv.flatten());
+    gl.drawArrays(gl.TRIANGLES, carverts, groundverts);
+
+    // buildings
+    const buildingOffsets:number[][] = [
+        [-10, -0.5, -10],
+        [ 10, -0.5, -10],
+        [-10, -0.5,  10],
+        [ 10, -0.5,  10]
+    ];
+
+    for (const [x, y, z] of buildingOffsets) {
+        mv = view.mult(translate(x, y, z));
+        gl.uniformMatrix4fv(umv, false, mv.flatten());
+        gl.drawArrays(gl.TRIANGLES, carverts + groundverts, buildingverts); // draw each building
+    }
+
+    // add front wheels
+    const frontWheelOffsets:number[][] = [
+        [-1.5, 0.0, 0.5],
+        [-1.5, 0.0, -0.5]
+    ];
+
+    for (const[x, y, z] of frontWheelOffsets) {
+        mv = view
+            .mult(translate(xoffset, 0.0, zoffset))
+            .mult(rotateY(heading * 180.0 / Math.PI))
+            .mult(translate(x, y, z))
+            .mult(rotateY(yrot))
+            .mult(rotateZ(zrot))
+            .mult(rotateX(90.0));
+        gl.uniformMatrix4fv(umv, false, mv.flatten());
+        gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts, wheelverts); // draw each wheel
+    }
+
+    // add back wheels
+    const backWheelOffsets:number[][] = [
+        [1.5, 0.0, 0.5],
+        [1.5, 0.0, -0.5]
+    ];
+
+    for(const[x, y, z] of backWheelOffsets) {
+        mv = view
+            .mult(translate(xoffset, 0.0, zoffset))
+            .mult(rotateY(heading * 180.0 / Math.PI))
+            .mult(translate(x, y, z))
+            .mult(rotateZ(zrot))
+            .mult(rotateX(90.0));
+        gl.uniformMatrix4fv(umv, false, mv.flatten());
+        gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts, wheelverts); // draw each wheel
+    }
+
+    // add headlights
+    const headlightOffsets:number[][] = [
+        [-1.55, 0.0, -0.3],
+        [-1.55, 0.0, 0.3]
+    ];
+    let headlightIndex:number = 1;
+
+    // define model space position and direction of light sources
+    let localPos:vec4 = new vec4(0.0, 0.05, 0.0, 1.0);
+    let localDir:vec4 = new vec4(0.0, 1.0, 0.0, 0.0);
+
+    for (const [x, y, z] of headlightOffsets) {
+
+        mv = view
+            .mult(translate(xoffset, 0.0, zoffset))
+            .mult(rotateY(heading * 180.0 / Math.PI))
+            .mult(translate(x, y, z))
+            .mult(rotateZ(90.0));
+        gl.uniformMatrix4fv(umv, false, mv.flatten());
+        gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts + wheelverts, headlightverts); // draw each headlight
+
+        const eyePos:vec4 = mv.mult(localPos); // multiply by same mv to transition light source position to eye space
+
+        // multiply by only the rotations of mv to transition light source direction to eye space
+        mv = view
+            .mult(rotateY(heading * 180.0 / Math.PI))
+            .mult(rotateZ(90.0));
+        const eyeDir:vec4 = mv.mult(localDir);
+
+        // send to shader
+        gl.uniform4fv(lightPosition[headlightIndex], eyePos.flatten());
+        gl.uniform4fv(lightColor[headlightIndex], [1, 1, 1, 1]);
+        gl.uniform4fv(lightDirection[headlightIndex], eyeDir.flatten());
+        gl.uniform1i(on_off[headlightIndex], lightSwitches[headlightIndex] ? 1 : 0);
+
+        headlightIndex++;
+    }
+
+    // draw tall multicolor buildings
+    const tallBuildingOffsets:number[][] = [
+        [0.0, 0.0, 10],
+        [0.0, 0.0, -10],
+        [-10, 0.0,  0.0],
+        [ 10, 0.0,  0.0]
+    ];
+
+    for (const [x, y, z] of tallBuildingOffsets) {
+        mv = view.mult(translate(x, y, z));
+        gl.uniformMatrix4fv(umv, false, mv.flatten());
+        gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts + wheelverts + headlightverts, tallbuildingverts); // draw each building
+    }
+
+    if (!excludeSemisphere) {
+        drawSemisphere();
+    }
+}
+
+
+// draw the semisphere
 function drawSemisphere() {
+
+    gl.useProgram(semisphereProgram);
+
+    // semisphere has a separate model matrix to transition semisphere from model to world space
+    // apply same transformations as the ones applied to the car
+    let model:mat4 = translate(xoffset, 0.0, zoffset)
+                        .mult(rotateY(heading * 180.0 / Math.PI))
+                        .mult(translate(0.0, 0.6, 0.0)); // raise semisphere to top of car
+    let view:mat4 = getChaseCameraView();
+    let proj:mat4 = getChaseCameraProjection();
+    gl.uniformMatrix4fv(uSemisphereModel, false, model.flatten());
+    gl.uniformMatrix4fv(uSemisphereView, false, view.flatten());
+    gl.uniformMatrix4fv(uSemisphereProj, false, proj.flatten());
+
+    // bind semisphere buffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, semisphereId);
+
+    // setup attribute pointers
+    gl.vertexAttribPointer(vSemispherePosition, 4, gl.FLOAT, false, 32, 0);
+    gl.enableVertexAttribArray(vSemispherePosition);
+
+    gl.vertexAttribPointer(vSemisphereNormal, 4, gl.FLOAT, false, 32, 16);
+    gl.enableVertexAttribArray(vSemisphereNormal);
+
+    gl.drawArrays(gl.TRIANGLES, 0, semisphereVertCount); // draw the semisphere
+
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
 }
 
@@ -989,7 +1180,7 @@ function update(){
     requestAnimationFrame(render);
 }
 
-//draw a new frame
+// draw a new frame
 function render(){
 
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -997,13 +1188,17 @@ function render(){
     // render the cubemap
     renderEnvironmentCubemapFull();
 
+    const view:mat4 = getChaseCameraView();
+    const proj:mat4 = getChaseCameraProjection();
+
     // draw all objects except semisphere
-    drawSceneObjects(true);
+    drawSceneObjects(view, proj, true);
 
     // bind env cubemap and draw semisphere with refractive shader
-    gl.activeTexture(gl.TEXTURE1);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_CUBE_MAP, envCubemap);
-    gl.uniform1i(uEnvCubemapSampler, 1);
+    gl.useProgram(semisphereProgram);
+    gl.uniform1i(uEnvCubemapSampler, 0);
 
     // draw refractive glass semisphere
     drawSemisphere();
