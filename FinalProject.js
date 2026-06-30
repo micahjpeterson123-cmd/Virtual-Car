@@ -136,11 +136,6 @@ window.onload = function init() {
         on_off[i] = gl.getUniformLocation(program, `on_off[${i}]`);
         lightSwitches[i] = true;
     }
-    // disable headlights (For some reason, generating the cubemap from the perspective
-    // of the center of the glass semisphere completely breaks the headlight light source behavior.
-    // However, when the cubemap is generated from the perspective of the chase camera, the
-    // headlights work completely fine. I have tried to figure out why this is for hours and
-    // have gotten nowhere. If you can figure out what is happening, be my guest.)
     lightSwitches[1] = lightSwitches[2] = false;
     // initialize various animation parameters
     xoffset = zoffset = 0;
@@ -815,7 +810,9 @@ function drawSceneObjects(view, proj, excludeSemisphere) {
     gl.vertexAttrib1f(vSpecularExponent, 5.0);
     gl.uniform4fv(ambient_light, [0.3, 0.3, 0.3, 1]);
     // send over light uniform values
-    gl.uniform4fv(lightPosition[0], [0, 100, 0, 1]);
+    const overheadWorldPos = new vec4(0, 100, 0, 1.0);
+    const overheadEyePos = view.mult(overheadWorldPos);
+    gl.uniform4fv(lightPosition[0], overheadEyePos.flatten());
     gl.uniform4fv(lightColor[0], [1, 1, 1, 1]);
     gl.uniform1i(on_off[0], lightSwitches[0] ? 1 : 0);
     gl.uniformMatrix4fv(uproj, false, proj.flatten());
