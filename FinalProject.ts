@@ -149,7 +149,7 @@ window.onload = function init() {
     gl.uniform1i(mode, 1);
     // send over refractive index ratio (1.0 / 1.5) to semisphereProgram
     eta = gl.getUniformLocation(semisphereProgram, "eta");
-    // 0.0 actually looks much better
+    // 0.0 actually looks much better?
     gl.uniform1f(eta, 0.0);
 
     gl.useProgram(program);
