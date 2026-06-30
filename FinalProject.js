@@ -819,6 +819,33 @@ function drawSceneObjects(view, proj, excludeSemisphere) {
     gl.uniform4fv(lightColor[0], [1, 1, 1, 1]);
     gl.uniform1i(on_off[0], lightSwitches[0] ? 1 : 0);
     gl.uniformMatrix4fv(uproj, false, proj.flatten());
+    // compute + send headlight uniforms FIRST, before anything they should light up gets drawn
+    const headlightOffsets = [
+        [-1.55, 0.0, -0.3],
+        [-1.55, 0.0, 0.3]
+    ];
+    const localPos = new vec4(0.0, 0.05, 0.0, 1.0);
+    const localDir = new vec4(0.0, 1.0, 0.0, 0.0);
+    const headlightMVs = [];
+    let headlightIndex = 1;
+    for (const [x, y, z] of headlightOffsets) {
+        const lmv = view
+            .mult(translate(xoffset, 0.0, zoffset))
+            .mult(rotateY(heading * 180.0 / Math.PI))
+            .mult(translate(x, y, z))
+            .mult(rotateZ(90.0));
+        headlightMVs.push(lmv);
+        const eyePos = lmv.mult(localPos);
+        const dirMV = view
+            .mult(rotateY(heading * 180.0 / Math.PI))
+            .mult(rotateZ(90.0));
+        const eyeDir = dirMV.mult(localDir);
+        gl.uniform4fv(lightPosition[headlightIndex], eyePos.flatten());
+        gl.uniform4fv(lightColor[headlightIndex], [1, 1, 1, 1]);
+        gl.uniform4fv(lightDirection[headlightIndex], eyeDir.flatten());
+        gl.uniform1i(on_off[headlightIndex], lightSwitches[headlightIndex] ? 1 : 0);
+        headlightIndex++;
+    }
     // car body
     let mv = view
         .mult(translate(xoffset, 0.0, zoffset))
@@ -880,35 +907,10 @@ function drawSceneObjects(view, proj, excludeSemisphere) {
         gl.uniformMatrix4fv(umv, false, mv.flatten());
         gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts, wheelverts); // draw each wheel
     }
-    // add headlights
-    const headlightOffsets = [
-        [-1.55, 0.0, -0.3],
-        [-1.55, 0.0, 0.3]
-    ];
-    let headlightIndex = 1;
-    // define model space position and direction of light sources
-    let localPos = new vec4(0.0, 0.05, 0.0, 1.0);
-    let localDir = new vec4(0.0, 1.0, 0.0, 0.0);
-    for (const [x, y, z] of headlightOffsets) {
-        mv = view
-            .mult(translate(xoffset, 0.0, zoffset))
-            .mult(rotateY(heading * 180.0 / Math.PI))
-            .mult(translate(x, y, z))
-            .mult(rotateZ(90.0));
-        gl.uniformMatrix4fv(umv, false, mv.flatten());
+    // draw headlight meshes (uniforms already set above, before the car body was drawn)
+    for (let i = 0; i < headlightMVs.length; i++) {
+        gl.uniformMatrix4fv(umv, false, headlightMVs[i].flatten());
         gl.drawArrays(gl.TRIANGLES, carverts + groundverts + buildingverts + wheelverts, headlightverts); // draw each headlight
-        const eyePos = mv.mult(localPos); // multiply by same mv to transition light source position to eye space
-        // multiply by only the rotations of mv to transition light source direction to eye space
-        mv = view
-            .mult(rotateY(heading * 180.0 / Math.PI))
-            .mult(rotateZ(90.0));
-        const eyeDir = mv.mult(localDir);
-        // send to shader
-        gl.uniform4fv(lightPosition[headlightIndex], eyePos.flatten());
-        gl.uniform4fv(lightColor[headlightIndex], [1, 1, 1, 1]);
-        gl.uniform4fv(lightDirection[headlightIndex], eyeDir.flatten());
-        gl.uniform1i(on_off[headlightIndex], lightSwitches[headlightIndex] ? 1 : 0);
-        headlightIndex++;
     }
     // draw tall multicolor buildings
     const tallBuildingOffsets = [
